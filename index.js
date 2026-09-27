@@ -7,11 +7,13 @@ const TelegramBot = require("node-telegram-bot-api");
 // =========================
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const BOT_USERNAME = process.env.BOT_USERNAME;
 const FIREBASE_URL = process.env.FIREBASE_URL;
 const ADMIN_ID = process.env.ADMIN_ID;
+const FIREBASE_SERVICE_ACCOUNT = process.env.FIREBASE_SERVICE_ACCOUNT;
 
 // =========================
-// CHECK ENV
+// CHECK ENVIRONMENT
 // =========================
 
 if (!BOT_TOKEN) {
@@ -29,19 +31,35 @@ if (!ADMIN_ID) {
   process.exit(1);
 }
 
+if (!FIREBASE_SERVICE_ACCOUNT) {
+  console.error("FIREBASE_SERVICE_ACCOUNT is missing");
+  process.exit(1);
+}
+
 // =========================
 // FIREBASE
 // =========================
 
+let serviceAccount;
+
+try {
+  serviceAccount = JSON.parse(FIREBASE_SERVICE_ACCOUNT);
+} catch (error) {
+  console.error("Invalid FIREBASE_SERVICE_ACCOUNT JSON");
+  process.exit(1);
+}
+
 admin.initializeApp({
-  credential: admin.credential.applicationDefault(),
+  credential: admin.credential.cert(serviceAccount),
   databaseURL: FIREBASE_URL
 });
 
 const db = admin.database();
 
+console.log("Firebase connected successfully");
+
 // =========================
-// EXPRESS
+// EXPRESS SERVER
 // =========================
 
 const app = express();
@@ -63,6 +81,8 @@ const bot = new TelegramBot(BOT_TOKEN, {
   polling: true
 });
 
+console.log("Telegram bot started");
+
 // =========================
 // START COMMAND
 // =========================
@@ -74,15 +94,18 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
   const firstName = msg.from.first_name || "";
   const username = msg.from.username || "";
 
-  const startParam = match && match[1]
-    ? match[1]
-    : null;
+  const startParam =
+    match && match[1] ? match[1] : null;
 
   const userRef = db.ref(`users/${userId}`);
 
   try {
 
     const snapshot = await userRef.once("value");
+
+    // =========================
+    // NEW USER
+    // =========================
 
     if (!snapshot.exists()) {
 
@@ -122,24 +145,35 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
 
       });
 
-      // Referral count
+      // =========================
+      // REFERRAL
+      // =========================
+
       if (referredBy) {
 
-        const referrerRef = db.ref(`users/${referredBy}`);
+        const referrerRef =
+          db.ref(`users/${referredBy}`);
 
         const referrerSnapshot =
           await referrerRef.once("value");
 
         if (referrerSnapshot.exists()) {
 
-          await referrerRef.child("referrals")
-            .transaction(current => (current || 0) + 1);
+          await referrerRef
+            .child("referrals")
+            .transaction(current =>
+              (current || 0) + 1
+            );
 
         }
 
       }
 
     } else {
+
+      // =========================
+      // EXISTING USER
+      // =========================
 
       await userRef.update({
 
@@ -153,6 +187,10 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
 
     }
 
+    // =========================
+    // BOT MENU
+    // =========================
+
     const keyboard = {
 
       inline_keyboard: [
@@ -160,10 +198,13 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
         [
           {
             text: "🚀 Open TapEarn",
+
             web_app: {
-              url: process.env.MINI_APP_URL ||
+              url:
+                process.env.MINI_APP_URL ||
                 "https://example.com"
             }
+
           }
         ],
 
@@ -171,10 +212,8 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
           {
             text: "👥 Invite Friends",
             callback_data: "invite"
-          }
-        ],
+          },
 
-        [
           {
             text: "💰 Balance",
             callback_data: "balance"
@@ -190,10 +229,15 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
       userId,
 
       `🎉 Welcome to TapEarn, ${firstName || "Friend"}!\n\n` +
+
       `👆 Tap and earn coins\n` +
+
       `⚡ Upgrade your power\n` +
+
       `👥 Invite friends\n` +
+
       `💰 Build your balance\n\n` +
+
       `Start earning now! 🚀`,
 
       {
@@ -206,17 +250,28 @@ bot.onText(/^\/start(?:\s+(.+))?$/, async (msg, match) => {
 
     console.error("START ERROR:", error);
 
-    bot.sendMessage(
-      userId,
-      "❌ Something went wrong. Please try again later."
-    );
+    try {
+
+      await bot.sendMessage(
+        userId,
+        "❌ Something went wrong. Please try again later."
+      );
+
+    } catch (sendError) {
+
+      console.error(
+        "MESSAGE ERROR:",
+        sendError
+      );
+
+    }
 
   }
 
 });
 
 // =========================
-// BALANCE BUTTON
+// CALLBACK BUTTONS
 // =========================
 
 bot.on("callback_query", async (query) => {
@@ -225,10 +280,15 @@ bot.on("callback_query", async (query) => {
 
   try {
 
+    // =========================
+    // BALANCE
+    // =========================
+
     if (query.data === "balance") {
 
       const snapshot =
-        await db.ref(`users/${userId}`).once("value");
+        await db.ref(`users/${userId}`)
+          .once("value");
 
       const user = snapshot.val();
 
@@ -242,13 +302,18 @@ bot.on("callback_query", async (query) => {
         );
 
         return;
+
       }
 
       await bot.answerCallbackQuery(
+
         query.id,
+
         {
-          text: `💰 Balance: ${user.coins || 0} coins`
+          text:
+            `💰 Balance: ${user.coins || 0} coins`
         }
+
       );
 
     }
@@ -260,7 +325,7 @@ bot.on("callback_query", async (query) => {
     if (query.data === "invite") {
 
       const botUsername =
-        process.env.BOT_USERNAME || "TapEarnBot";
+        BOT_USERNAME || "TapEarnBot";
 
       const inviteLink =
         `https://t.me/${botUsername}?start=${userId}`;
@@ -270,26 +335,34 @@ bot.on("callback_query", async (query) => {
         userId,
 
         `👥 Invite Friends\n\n` +
-        `Share your referral link:\n\n` +
+
+        `🔗 Your referral link:\n\n` +
+
         `${inviteLink}\n\n` +
+
         `🎁 Invite friends and grow your earnings!`
 
       );
 
-      await bot.answerCallbackQuery(query.id);
+      await bot.answerCallbackQuery(
+        query.id
+      );
 
     }
 
   } catch (error) {
 
-    console.error("CALLBACK ERROR:", error);
+    console.error(
+      "CALLBACK ERROR:",
+      error
+    );
 
   }
 
 });
 
 // =========================
-// ADMIN BROADCAST FOUNDATION
+// ADMIN BROADCAST
 // =========================
 
 bot.onText(/^\/broadcast$/, async (msg) => {
@@ -312,18 +385,34 @@ bot.onText(/^\/broadcast$/, async (msg) => {
     userId,
 
     `📢 Broadcast System\n\n` +
-    `এই command-এর full broadcast panel আমরা পরের ধাপে তৈরি করব.\n\n` +
-    `বর্তমানে Firebase users database প্রস্তুত আছে।`
+
+    `Broadcast panel will be added in the next step.\n\n` +
+
+    `👥 Users database is ready.`
 
   );
 
 });
 
 // =========================
-// SERVER
+// ERROR HANDLING
 // =========================
 
-const PORT = process.env.PORT || 3000;
+bot.on("polling_error", (error) => {
+
+  console.error(
+    "Telegram polling error:",
+    error.message
+  );
+
+});
+
+// =========================
+// SERVER START
+// =========================
+
+const PORT =
+  process.env.PORT || 3000;
 
 app.listen(PORT, () => {
 
